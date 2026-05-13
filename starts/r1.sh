@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 qemu-system-x86_64 -name r1 -m 256 -enable-kvm -cpu host \
   -drive file=~/virt-net/qcows/r1.qcow2,format=qcow2,if=virtio \
   -netdev tap,id=net0,ifname=tap-r1-gw,script=no,downscript=no \
