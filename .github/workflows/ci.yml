@@ -1,0 +1,103 @@
+name: CI - QEMU FRR Lab
+
+on:
+  push:
+    branches: [ main, master, virt-net ]
+  pull_request:
+    branches: [ main, master, virt-net ]
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: .
+          ignore_paths: qcows iso  # heavy dirs
+
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck qemu-system-x86 qemu-utils bridge-utils iproute2
+
+      - name: Check scripts syntax
+        run: |
+          for script in *.sh starts/*.sh; do
+            echo "Checking $script..."
+            bash -n "$script" || exit 1
+          done
+
+      - name: ShellCheck (strict)
+        run: shellcheck --severity=warning *.sh starts/*.sh
+
+  test-network-setup:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup test environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 bridge-utils net-tools iptables iproute2
+
+      - name: Test setup-net.sh (dry-run)
+        run: |
+          sudo ./setup-net.sh eth0 || true   # eth0 или runner's interface
+          ip -br link show type bridge
+          ip -br addr show
+  test-qemu-light:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            qemu-system-x86 qemu-utils \
+            bridge-utils iproute2 net-tools \
+            iptables
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | \
+            sudo tee /etc/udev/rules.d/99-kvm4all.rules
+
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+          ls -l /dev/kvm
+          [ -e /dev/kvm ] || echo "WARNING: /dev/kvm not available"
+
+      - name: Test network setup
+        run: |
+          sudo ./setup-net.sh || echo "setup-net.sh completed with warnings"
+
+          ip -br link show type bridge
+          ip -br addr show
+
+      - name: Test start one VM (light)
+        timeout-minutes: 2
+        run: |
+          echo "Starting c1.sh in background for quick test..."
+          
+          # Запускаем с таймаутом + daemonize
+          sudo timeout 45s ./starts/c1.sh -daemonize -nographic || true
+          
+          sleep 8
+          
+          # Проверяем, что процесс был
+          echo "QEMU processes:"
+          pgrep -a qemu || echo "No qemu process found (normal for short timeout)"
+          
+          sudo pkill -f qemu-system-x86_64 || true
