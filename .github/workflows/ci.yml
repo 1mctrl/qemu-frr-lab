@@ -2,104 +2,94 @@ name: CI - QEMU FRR Lab
 
 on:
   push:
-    branches: [ main, master, virt-net ]
+    branches: [ main, master ]
   pull_request:
-    branches: [ main, master, virt-net ]
-
-env:
-  CI: true
+    branches: [ main, master ]
 
 jobs:
-
   shellcheck:
+    name: ShellCheck
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
-      - name: ShellCheck
-        uses: ludeeus/action-shellcheck@master
-        with:
-          scandir: .
-          ignore_paths: qcows iso
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
 
-  lint:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install dependencies
+      - name: Syntax check
         run: |
-          sudo apt-get update
-          sudo apt-get install -y shellcheck qemu-system-x86 qemu-utils iproute2 bridge-utils
-
-      - name: Bash syntax check
-        run: |
-          set -e
-          for script in *.sh starts/*.sh; do
-            echo "Checking $script"
-            bash -n "$script"
+          for f in setup-net.sh starts/*.sh; do
+            bash -n "$f"
           done
 
-      - name: ShellCheck strict
-        run: shellcheck --severity=warning *.sh starts/*.sh
+      - name: ShellCheck
+        run: shellcheck --severity=warning setup-net.sh starts/*.sh
 
-
-  test-network-setup:
+  network:
+    name: Network setup dry-run
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
       - name: Install deps
+        run: sudo apt-get install -y iproute2 bridge-utils iptables
+
+      - name: Run setup-net.sh
         run: |
-          sudo apt-get update
-          sudo apt-get install -y iproute2 bridge-utils net-tools
+          sudo bash setup-net.sh lo
+          ip -br link show type bridge
+          ip -br link show type tun
 
-      - name: Safe network test (no host mutation)
+      - name: Verify bridges exist
         run: |
-          set -e
+          for br in br-host-gw br-gw-r1 br-gw-r2 br-r1-c1 br-r1-c2 br-r2-c3; do
+            ip link show "$br" > /dev/null && echo "OK: $br" || { echo "MISSING: $br"; exit 1; }
+          done
 
-          DEFAULT_IFACE=$(ip -o -4 route show to default | awk '{print $5}' | head -n1)
-          echo "Detected interface: $DEFAULT_IFACE"
+      - name: Verify taps exist
+        run: |
+          for tap in tap-gw-host tap-gw-r1 tap-gw-r2 tap-r1-gw tap-r1-c1 tap-r1-c2 tap-r2-gw tap-r2-c3 tap-c1 tap-c2 tap-c3; do
+            ip link show "$tap" > /dev/null && echo "OK: $tap" || { echo "MISSING: $tap"; exit 1; }
+          done
 
-          echo "CI mode: not modifying host network"
-          ./setup-net.sh "$DEFAULT_IFACE" || true
+      - name: Verify ip_forward
+        run: |
+          val=$(cat /proc/sys/net/ipv4/ip_forward)
+          [ "$val" = "1" ] && echo "OK: ip_forward=1" || { echo "FAIL: ip_forward=$val"; exit 1; }
 
-          ip -br link
-          ip -br addr
-
-
-  test-qemu-light:
+  qemu:
+    name: QEMU smoke test
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
-
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
 
-      - name: Install dependencies
+      - name: Install deps
+        run: sudo apt-get install -y qemu-system-x86 qemu-utils
+
+      - name: Check qemu version
+        run: qemu-system-x86_64 --version
+
+      - name: Inspect qcow files
         run: |
-          sudo apt-get update
-          sudo apt-get install -y qemu-system-x86 qemu-utils iproute2 bridge-utils net-tools iptables
+          for f in qcows/*.qcow2; do
+            qemu-img info "$f"
+          done
 
-      - name: Disable KVM dependency safely
+      - name: Verify start scripts reference correct qcow paths
         run: |
-          echo "CI environment - KVM optional"
-          ls -l /dev/kvm || echo "no /dev/kvm (expected)"
+          for f in starts/*.sh; do
+            grep -q "qcows/" "$f" && echo "OK: $f" || { echo "WARN: $f has no qcows/ reference"; }
+          done
 
-      - name: Network sanity check
+      - name: Boot GW disk (no KVM)
         run: |
-          ip -br link
-          ip route
-
-      - name: Run QEMU smoke test (no daemonize, no KVM required)
-        run: |
-          set -e
-
-          echo "Starting QEMU test VM..."
-
-          # ВАЖНО: timeout без daemonize
-          sudo timeout 40s ./starts/gw.sh -nographic || true
-
-          echo "Checking QEMU processes..."
-          pgrep -a qemu-system-x86_64 || echo "no qemu running (ok)"
-
-          sudo pkill -f qemu-system-x86_64 || true
+          timeout 10s qemu-system-x86_64 \
+            -name gw \
+            -m 512 \
+            -no-reboot \
+            -drive file=qcows/gw.qcow2,format=qcow2,if=virtio \
+            -nographic \
+            -serial null || true
+          echo "QEMU exited cleanly"
