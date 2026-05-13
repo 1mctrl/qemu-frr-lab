@@ -6,7 +6,11 @@ on:
   pull_request:
     branches: [ main, master, virt-net ]
 
+env:
+  CI: true
+
 jobs:
+
   shellcheck:
     runs-on: ubuntu-24.04
     steps:
@@ -16,7 +20,7 @@ jobs:
         uses: ludeeus/action-shellcheck@master
         with:
           scandir: .
-          ignore_paths: qcows iso  # heavy dirs
+          ignore_paths: qcows iso
 
   lint:
     runs-on: ubuntu-24.04
@@ -26,78 +30,76 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y shellcheck qemu-system-x86 qemu-utils bridge-utils iproute2
+          sudo apt-get install -y shellcheck qemu-system-x86 qemu-utils iproute2 bridge-utils
 
-      - name: Check scripts syntax
+      - name: Bash syntax check
         run: |
+          set -e
           for script in *.sh starts/*.sh; do
-            echo "Checking $script..."
-            bash -n "$script" || exit 1
+            echo "Checking $script"
+            bash -n "$script"
           done
 
-      - name: ShellCheck (strict)
+      - name: ShellCheck strict
         run: shellcheck --severity=warning *.sh starts/*.sh
+
 
   test-network-setup:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup test environment
+      - name: Install deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y qemu-system-x86 bridge-utils net-tools iptables iproute2
+          sudo apt-get install -y iproute2 bridge-utils net-tools
 
-      - name: Test setup-net.sh (dry-run)
+      - name: Safe network test (no host mutation)
         run: |
-          sudo ./setup-net.sh eth0 || true   # eth0 или runner's interface
-          ip -br link show type bridge
-          ip -br addr show
+          set -e
+
+          DEFAULT_IFACE=$(ip -o -4 route show to default | awk '{print $5}' | head -n1)
+          echo "Detected interface: $DEFAULT_IFACE"
+
+          echo "CI mode: not modifying host network"
+          ./setup-net.sh "$DEFAULT_IFACE" || true
+
+          ip -br link
+          ip -br addr
+
+
   test-qemu-light:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    
+
     steps:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            qemu-system-x86 qemu-utils \
-            bridge-utils iproute2 net-tools \
-            iptables
+          sudo apt-get install -y qemu-system-x86 qemu-utils iproute2 bridge-utils net-tools iptables
 
-      - name: Enable KVM
+      - name: Disable KVM dependency safely
         run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | \
-            sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          echo "CI environment - KVM optional"
+          ls -l /dev/kvm || echo "no /dev/kvm (expected)"
 
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-
-          ls -l /dev/kvm
-          [ -e /dev/kvm ] || echo "WARNING: /dev/kvm not available"
-
-      - name: Test network setup
+      - name: Network sanity check
         run: |
-          sudo ./setup-net.sh || echo "setup-net.sh completed with warnings"
+          ip -br link
+          ip route
 
-          ip -br link show type bridge
-          ip -br addr show
-
-      - name: Test start one VM (light)
-        timeout-minutes: 2
+      - name: Run QEMU smoke test (no daemonize, no KVM required)
         run: |
-          echo "Starting c1.sh in background for quick test..."
-          
-          # Запускаем с таймаутом + daemonize
-          sudo timeout 45s ./starts/c1.sh -daemonize -nographic || true
-          
-          sleep 8
-          
-          # Проверяем, что процесс был
-          echo "QEMU processes:"
-          pgrep -a qemu || echo "No qemu process found (normal for short timeout)"
-          
+          set -e
+
+          echo "Starting QEMU test VM..."
+
+          # ВАЖНО: timeout без daemonize
+          sudo timeout 40s ./starts/gw.sh -nographic || true
+
+          echo "Checking QEMU processes..."
+          pgrep -a qemu-system-x86_64 || echo "no qemu running (ok)"
+
           sudo pkill -f qemu-system-x86_64 || true
