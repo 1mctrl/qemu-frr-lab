@@ -34,12 +34,6 @@ jobs:
       - name: Install deps
         run: sudo apt-get install -y iproute2 bridge-utils iptables
 
-      - name: Run setup-net.sh
-        run: |
-          sudo bash setup-net.sh lo
-          ip -br link show type bridge
-          ip -br link show type tun
-
       - name: Verify bridges exist
         run: |
           for br in br-host-gw br-gw-r1 br-gw-r2 br-r1-c1 br-r1-c2 br-r2-c3; do
