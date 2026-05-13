@@ -34,12 +34,15 @@ jobs:
       - name: Install deps
         run: sudo apt-get install -y iproute2 bridge-utils iptables
 
+      - name: Run setup-net.sh
+        run: sudo bash -x setup-net.sh lo 2>&1 || true
+        
       - name: Verify bridges exist
         run: |
           for br in br-host-gw br-gw-r1 br-gw-r2 br-r1-c1 br-r1-c2 br-r2-c3; do
             ip link show "$br" > /dev/null && echo "OK: $br" || { echo "MISSING: $br"; exit 1; }
           done
-
+      
       - name: Verify taps exist
         run: |
           for tap in tap-gw-host tap-gw-r1 tap-gw-r2 tap-r1-gw tap-r1-c1 tap-r1-c2 tap-r2-gw tap-r2-c3 tap-c1 tap-c2 tap-c3; do
@@ -51,8 +54,6 @@ jobs:
           val=$(cat /proc/sys/net/ipv4/ip_forward)
           [ "$val" = "1" ] && echo "OK: ip_forward=1" || { echo "FAIL: ip_forward=$val"; exit 1; }
 
-      - name: Run setup-net.sh
-        run: sudo bash -x setup-net.sh lo 2>&1 || true
 
   qemu:
     name: QEMU smoke test
