@@ -57,6 +57,9 @@ jobs:
           val=$(cat /proc/sys/net/ipv4/ip_forward)
           [ "$val" = "1" ] && echo "OK: ip_forward=1" || { echo "FAIL: ip_forward=$val"; exit 1; }
 
+      - name: Run setup-net.sh
+        run: sudo bash -x setup-net.sh lo 2>&1 || true
+
   qemu:
     name: QEMU smoke test
     runs-on: ubuntu-24.04
