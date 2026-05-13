@@ -2,9 +2,9 @@ name: CI - QEMU FRR Lab
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ virt-net ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ virt-net ]
 
 jobs:
   shellcheck:
