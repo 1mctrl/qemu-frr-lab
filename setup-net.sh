@@ -1,10 +1,11 @@
 #!/bin/bash
-set -e
 
 create_bridge() {
     local BR="$1" ADDR="$2"
     ip link show "$BR" &>/dev/null || { ip link add name "$BR" type bridge && ip link set "$BR" up; }
-    [ -n "$ADDR" ] && ! ip addr show "$BR" | grep -q "$ADDR" && ip addr add "$ADDR" dev "$BR"
+    if [ -n "$ADDR" ]; then
+        ip addr show "$BR" | grep -q "$ADDR" || ip addr add "$ADDR" dev "$BR"
+    fi
 }
 
 create_tap() {
